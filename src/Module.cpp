@@ -227,7 +227,7 @@ void Module::SPItransfer(uint16_t cmd, uint32_t reg, const uint8_t* dataOut, uin
     for(size_t n = 0; n < numBytes; n++) {
       RADIOLIB_DEBUG_SPI_PRINT_NOTAG("%X\t", debugBuffPtr[n]);
     }
-    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG();
+    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG("");
   #endif
 
   #if !RADIOLIB_STATIC_ONLY
@@ -317,6 +317,7 @@ int16_t Module::SPIcheckStream() {
 
 int16_t Module::SPItransferStream(const uint8_t* cmd, uint8_t cmdLen, bool write, const uint8_t* dataOut, uint8_t* dataIn, size_t numBytes, bool waitForGpio) {
   // prepare the output buffer
+  int16_t state = RADIOLIB_ERR_NONE;
   size_t buffLen = cmdLen + numBytes;
   if(!write) {
     buffLen += (this->spiConfig.widths[RADIOLIB_MODULE_SPI_WIDTH_STATUS] / 8);
@@ -391,20 +392,18 @@ int16_t Module::SPItransferStream(const uint8_t* cmd, uint8_t cmdLen, bool write
         // cppcheck-suppress unsignedLessThanZero
         if(this->hal->millis() - start >= this->spiConfig.timeout) {
           RADIOLIB_DEBUG_BASIC_PRINTLN("GPIO post-transfer timeout, is it connected?");
-          #if !RADIOLIB_STATIC_ONLY
-            delete[] buffOut;
-            delete[] buffIn;
-          #endif
-          return(RADIOLIB_ERR_SPI_CMD_TIMEOUT);
+
+          // do not return yet to display the debug output
+          state = RADIOLIB_ERR_SPI_CMD_TIMEOUT;
+          break;
         }
       
       }
     }
   }
 
-  // parse status
-  int16_t state = RADIOLIB_ERR_NONE;
-  if((this->spiConfig.parseStatusCb != nullptr) && (numBytes > 0)) {
+  // parse status (only if GPIO did not timeout)
+  if((state == RADIOLIB_ERR_NONE) && (this->spiConfig.parseStatusCb != nullptr) && (numBytes > 0)) {
     state = this->spiConfig.parseStatusCb(buffIn[this->spiConfig.statusPos]);
   }
   
@@ -427,7 +426,7 @@ int16_t Module::SPItransferStream(const uint8_t* cmd, uint8_t cmdLen, bool write
     for(; n < cmdLen; n++) {
       RADIOLIB_DEBUG_SPI_PRINT_NOTAG("%X\t", cmd[n]);
     }
-    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG();
+    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG("");
 
     // print data bytes
     RADIOLIB_DEBUG_SPI_PRINT("SI\t");
@@ -437,12 +436,12 @@ int16_t Module::SPItransferStream(const uint8_t* cmd, uint8_t cmdLen, bool write
     for(; n < buffLen; n++) {
       RADIOLIB_DEBUG_SPI_PRINT_NOTAG("%X\t", buffOut[n]);
     }
-    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG();
+    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG("");
     RADIOLIB_DEBUG_SPI_PRINT("SO\t");
     for(n = 0; n < buffLen; n++) {
       RADIOLIB_DEBUG_SPI_PRINT_NOTAG("%X\t", buffIn[n]);
     }
-    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG();
+    RADIOLIB_DEBUG_SPI_PRINTLN_NOTAG("");
   #endif
 
   #if !RADIOLIB_STATIC_ONLY

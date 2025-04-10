@@ -293,8 +293,9 @@ int16_t SX1278::setOutputPower(int8_t power) {
   return(this->setOutputPower(power, false));
 }
 
-int16_t SX1278::setOutputPower(int8_t power, bool useRfo) {
+int16_t SX1278::setOutputPower(int8_t power, bool forceRfo) {
   // check if power value is configurable
+  bool useRfo = (power < 2) || forceRfo;
   int16_t state = checkOutputPower(power, NULL, useRfo);
   RADIOLIB_ASSERT(state);
 
@@ -344,9 +345,9 @@ int16_t SX1278::checkOutputPower(int8_t power, int8_t* clipped, bool useRfo) {
   if(useRfo) {
     // RFO output
     if(clipped) {
-      *clipped = RADIOLIB_MAX(-3, RADIOLIB_MIN(15, power));
+      *clipped = RADIOLIB_MAX(-4, RADIOLIB_MIN(15, power));
     }
-    RADIOLIB_CHECK_RANGE(power, -3, 15, RADIOLIB_ERR_INVALID_OUTPUT_POWER);
+    RADIOLIB_CHECK_RANGE(power, -4, 15, RADIOLIB_ERR_INVALID_OUTPUT_POWER);
   } else {
     // PA_BOOST output, check high-power operation
     if(clipped) {

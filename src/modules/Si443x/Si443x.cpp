@@ -2,7 +2,9 @@
 #include <math.h>
 #if !RADIOLIB_EXCLUDE_SI443X
 
-Si443x::Si443x(Module* mod) : PhysicalLayer(RADIOLIB_SI443X_FREQUENCY_STEP_SIZE, RADIOLIB_SI443X_MAX_PACKET_LENGTH) {
+Si443x::Si443x(Module* mod) : PhysicalLayer() {
+  this->freqStep = RADIOLIB_SI443X_FREQUENCY_STEP_SIZE;
+  this->maxPacketLength = RADIOLIB_SI443X_MAX_PACKET_LENGTH;
   this->mod = mod;
 }
 
@@ -26,7 +28,7 @@ int16_t Si443x::begin(float br, float freqDev, float rxBw, uint8_t preambleLen) 
   this->mod->SPIwriteRegister(RADIOLIB_SI443X_REG_OP_FUNC_CONTROL_1, RADIOLIB_SI443X_SOFTWARE_RESET);
 
   // clear POR interrupt
-  clearIRQFlags();
+  clearIrqStatus();
 
   // configure settings not accessible by API
   int16_t state = config();
@@ -52,10 +54,13 @@ int16_t Si443x::begin(float br, float freqDev, float rxBw, uint8_t preambleLen) 
   state = packetMode();
   RADIOLIB_ASSERT(state);
 
-  state = setDataShaping(0);
+  state = setDataShaping(RADIOLIB_SHAPING_NONE);
   RADIOLIB_ASSERT(state);
 
-  state = setEncoding(0);
+  state = setEncoding(RADIOLIB_ENCODING_NRZ);
+  RADIOLIB_ASSERT(state);
+
+  state = setCRC(true);
   RADIOLIB_ASSERT(state);
 
   state = variablePacketLengthMode();
@@ -105,7 +110,7 @@ int16_t Si443x::receive(uint8_t* data, size_t len) {
   while(this->mod->hal->digitalRead(this->mod->getIrq())) {
     if(this->mod->hal->millis() - start > timeout) {
       standby();
-      clearIRQFlags();
+      clearIrqStatus();
       return(RADIOLIB_ERR_RX_TIMEOUT);
     }
   }
@@ -241,7 +246,7 @@ int16_t Si443x::startTransmit(const uint8_t* data, size_t len, uint8_t addr) {
   this->mod->SPIsetRegValue(RADIOLIB_SI443X_REG_OP_FUNC_CONTROL_2, RADIOLIB_SI443X_TX_FIFO_CLEAR, 0, 0);
 
   // clear interrupt flags
-  clearIRQFlags();
+  clearIrqStatus();
 
   // set packet length
   if (this->packetLengthConfig == RADIOLIB_SI443X_FIXED_PACKET_LENGTH_OFF) {
@@ -269,7 +274,7 @@ int16_t Si443x::startTransmit(const uint8_t* data, size_t len, uint8_t addr) {
 
 int16_t Si443x::finishTransmit() {
   // clear interrupt flags
-  clearIRQFlags();
+  clearIrqStatus();
 
   // set mode to standby to disable transmitter/RF switch
   return(standby());
@@ -285,13 +290,14 @@ int16_t Si443x::startReceive() {
   this->mod->SPIsetRegValue(RADIOLIB_SI443X_REG_OP_FUNC_CONTROL_2, RADIOLIB_SI443X_RX_FIFO_CLEAR, 1, 1);
 
   // clear interrupt flags
-  clearIRQFlags();
+  clearIrqStatus();
 
   // set RF switch (if present)
   this->mod->setRfSwitchState(Module::MODE_RX);
 
   // set interrupt mapping
-  this->mod->SPIwriteRegister(RADIOLIB_SI443X_REG_INTERRUPT_ENABLE_1, RADIOLIB_SI443X_VALID_PACKET_RECEIVED_ENABLED | RADIOLIB_SI443X_CRC_ERROR_ENABLED);
+  uint8_t irq = this->crcEnabled ? (RADIOLIB_SI443X_VALID_PACKET_RECEIVED_ENABLED | RADIOLIB_SI443X_CRC_ERROR_ENABLED) : RADIOLIB_SI443X_VALID_PACKET_RECEIVED_ENABLED;
+  this->mod->SPIwriteRegister(RADIOLIB_SI443X_REG_INTERRUPT_ENABLE_1, irq);
   this->mod->SPIwriteRegister(RADIOLIB_SI443X_REG_INTERRUPT_ENABLE_2, 0x00);
 
   // set mode to receive
@@ -309,8 +315,15 @@ int16_t Si443x::startReceive(uint32_t timeout, uint32_t irqFlags, uint32_t irqMa
 }
 
 int16_t Si443x::readData(uint8_t* data, size_t len) {
-  // clear interrupt flags
-  clearIRQFlags();
+  // read interrupt flags
+  uint32_t irq = getIrqFlags();
+
+  // check integrity CRC
+  // Si443x does not have the option to keep the data after CRC failed
+  // reading the FIFO will just repeat the first byte (see https://github.com/jgromes/RadioLib/issues/1430)
+  if(irq & RADIOLIB_SI443X_CRC_ERROR_INTERRUPT) {
+    return(RADIOLIB_ERR_CRC_MISMATCH);
+  }
 
   // get packet length
   size_t length = getPacketLength();
@@ -337,7 +350,7 @@ int16_t Si443x::readData(uint8_t* data, size_t len) {
   RADIOLIB_ASSERT(state);
 
   // clear interrupt flags
-  clearIRQFlags();
+  clearIrqStatus();
 
   return(RADIOLIB_ERR_NONE);
 }
@@ -633,6 +646,25 @@ int16_t Si443x::variablePacketLengthMode(uint8_t maxLen) {
   return(Si443x::setPacketMode(RADIOLIB_SI443X_FIXED_PACKET_LENGTH_OFF, maxLen));
 }
 
+uint32_t Si443x::getIrqFlags() {
+  uint8_t data[] = { 0x00, 0x00 };
+  this->mod->SPIreadRegisterBurst(RADIOLIB_SI443X_REG_INTERRUPT_STATUS_1, 2, data);
+  return(((uint32_t)(data[0]) << 8) | data[1]);
+}
+
+int16_t Si443x::clearIrqFlags(uint32_t irq) {
+  (void)irq;
+  (void)getIrqFlags();
+  return(RADIOLIB_ERR_NONE);
+}
+
+int16_t Si443x::setCRC(bool enable, bool mode) {
+  this->crcEnabled = enable;
+  uint8_t crcEn = enable ? RADIOLIB_SI443X_CRC_ON : RADIOLIB_SI443X_CRC_OFF;
+  uint8_t crcCfg = mode ? RADIOLIB_SI443X_CRC_IBM_CRC16 : RADIOLIB_SI443X_CRC_CCITT;
+  return(this->mod->SPIsetRegValue(RADIOLIB_SI443X_REG_DATA_ACCESS_CONTROL, crcEn | crcCfg, 2, 0));
+}
+
 Module* Si443x::getMod() {
   return(this->mod);
 }
@@ -705,9 +737,8 @@ bool Si443x::findChip() {
   return(flagFound);
 }
 
-void Si443x::clearIRQFlags() {
-  uint8_t buff[2];
-  this->mod->SPIreadRegisterBurst(RADIOLIB_SI443X_REG_INTERRUPT_STATUS_1, 2, buff);
+void Si443x::clearIrqStatus() {
+  (void)getIrqFlags();
 }
 
 void Si443x::clearFIFO(size_t count) {
@@ -765,9 +796,9 @@ int16_t Si443x::updateClockRecovery() {
   uint16_t rxOsr_fixed = (uint16_t)rxOsr;
 
   // print that whole mess
-  RADIOLIB_DEBUG_BASIC_PRINTLN("%X\n%X\n%X", bypass, decRate, manch);
+  RADIOLIB_DEBUG_BASIC_PRINTLN("%X %X %X", bypass, decRate, manch);
   RADIOLIB_DEBUG_BASIC_PRINT_FLOAT((double)rxOsr, 2);
-  RADIOLIB_DEBUG_BASIC_PRINTLN("\t%d\t%X\n%lu\t%lX\n%d\t%X", rxOsr_fixed, rxOsr_fixed, (long unsigned int)ncoOff, (long unsigned int)ncoOff, crGain, crGain);
+  RADIOLIB_DEBUG_BASIC_PRINTLN("\t%d\t%X" RADIOLIB_LINE_FEED "%lu\t%lX" RADIOLIB_LINE_FEED "%d\t%X", rxOsr_fixed, rxOsr_fixed, (long unsigned int)ncoOff, (long unsigned int)ncoOff, crGain, crGain);
 
   // update oversampling ratio
   int16_t state = this->mod->SPIsetRegValue(RADIOLIB_SI443X_REG_CLOCK_REC_OFFSET_2, (uint8_t)((rxOsr_fixed & 0x0700) >> 3), 7, 5);

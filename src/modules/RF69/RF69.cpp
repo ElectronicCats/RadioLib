@@ -2,7 +2,9 @@
 #include <math.h>
 #if !RADIOLIB_EXCLUDE_RF69
 
-RF69::RF69(Module* module) : PhysicalLayer(RADIOLIB_RF69_FREQUENCY_STEP_SIZE, RADIOLIB_RF69_MAX_PACKET_LENGTH)  {
+RF69::RF69(Module* module) : PhysicalLayer() {
+  this->freqStep = RADIOLIB_RF69_FREQUENCY_STEP_SIZE;
+  this->maxPacketLength = RADIOLIB_RF69_MAX_PACKET_LENGTH;
   this->mod = module;
 }
 
@@ -694,7 +696,7 @@ int16_t RF69::setOutputPower(int8_t pwr, bool highPower) {
 
 int16_t RF69::setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBits) {
   // check constraints
-  if((maxErrBits > 7) || (len > 8)) {
+  if((maxErrBits > 7) || (len == 0) || (len > 8)) {
     return(RADIOLIB_ERR_INVALID_SYNC_WORD);
   }
 
@@ -710,14 +712,10 @@ int16_t RF69::setSyncWord(const uint8_t* syncWord, size_t len, uint8_t maxErrBit
   RADIOLIB_ASSERT(state);
 
   // set the length
-  state = this->mod->SPIsetRegValue(RADIOLIB_RF69_REG_SYNC_CONFIG, len, 5, 3);
+  state = this->mod->SPIsetRegValue(RADIOLIB_RF69_REG_SYNC_CONFIG, (len-1)<<3, 5, 3);
 
   // set sync word register
   this->mod->SPIwriteRegisterBurst(RADIOLIB_RF69_REG_SYNC_VALUE_1, syncWord, len);
-  if(state == RADIOLIB_ERR_NONE) {
-    this->syncWordLength = len;
-  }
-
   return(state);
 }
 
@@ -812,7 +810,7 @@ int16_t RF69::enableSyncWordFiltering(uint8_t maxErrBits) {
   RADIOLIB_ASSERT(state);
 
   // set maximum error bits
-  return(this->mod->SPIsetRegValue(RADIOLIB_RF69_REG_SYNC_CONFIG, maxErrBits, 3, 0));
+  return(this->mod->SPIsetRegValue(RADIOLIB_RF69_REG_SYNC_CONFIG, maxErrBits, 2, 0));
 }
 
 int16_t RF69::disableSyncWordFiltering() {

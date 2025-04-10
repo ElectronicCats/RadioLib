@@ -2,7 +2,9 @@
 #include <string.h>
 #if !RADIOLIB_EXCLUDE_NRF24
 
-nRF24::nRF24(Module* mod) : PhysicalLayer(RADIOLIB_NRF24_FREQUENCY_STEP_SIZE, RADIOLIB_NRF24_MAX_PACKET_LENGTH) {
+nRF24::nRF24(Module* mod) : PhysicalLayer() {
+  this->freqStep = RADIOLIB_NRF24_FREQUENCY_STEP_SIZE;
+  this->maxPacketLength = RADIOLIB_NRF24_MAX_PACKET_LENGTH;
   this->mod = mod;
 }
 
@@ -559,6 +561,10 @@ int16_t nRF24::setEncoding(uint8_t encoding) {
   // this method is implemented only for PhysicalLayer compatibility
   (void)encoding;
   return(RADIOLIB_ERR_NONE);
+}
+
+int16_t nRF24::setLNA(bool enable) {
+  return(this->mod->SPIsetRegValue(RADIOLIB_NRF24_REG_RF_SETUP, enable ? RADIOLIB_NRF24_RF_LNA_ON : RADIOLIB_NRF24_RF_LNA_OFF, 0, 0));
 }
 
 void nRF24::clearIRQ() {

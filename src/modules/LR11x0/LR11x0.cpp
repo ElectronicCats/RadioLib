@@ -8,7 +8,9 @@
 
 #if !RADIOLIB_EXCLUDE_LR11X0
 
-LR11x0::LR11x0(Module* mod) : PhysicalLayer(RADIOLIB_LR11X0_FREQUENCY_STEP_SIZE, RADIOLIB_LR11X0_MAX_PACKET_LENGTH) {
+LR11x0::LR11x0(Module* mod) : PhysicalLayer() {
+  this->freqStep = RADIOLIB_LR11X0_FREQUENCY_STEP_SIZE;
+  this->maxPacketLength = RADIOLIB_LR11X0_MAX_PACKET_LENGTH;
   this->mod = mod;
   this->XTAL = false;
   this->irqMap[RADIOLIB_IRQ_TX_DONE] = RADIOLIB_LR11X0_IRQ_TX_DONE;
@@ -414,73 +416,6 @@ void LR11x0::clearPacketSentAction() {
   this->clearIrqAction();
 }
 
-int16_t LR11x0::startTransmit(const uint8_t* data, size_t len, uint8_t addr) {
-  // suppress unused variable warning
-  (void)addr;
-
-  // check packet length
-  if(len > RADIOLIB_LR11X0_MAX_PACKET_LENGTH) {
-    return(RADIOLIB_ERR_PACKET_TOO_LONG);
-  }
-
-  // maximum packet length is decreased by 1 when address filtering is active
-  if((this->addrComp != RADIOLIB_LR11X0_GFSK_ADDR_FILTER_DISABLED) && (len > RADIOLIB_LR11X0_MAX_PACKET_LENGTH - 1)) {
-    return(RADIOLIB_ERR_PACKET_TOO_LONG);
-  }
-
-  // set packet Length
-  int16_t state = RADIOLIB_ERR_NONE;
-  uint8_t modem = RADIOLIB_LR11X0_PACKET_TYPE_NONE;
-  state = getPacketType(&modem);
-  RADIOLIB_ASSERT(state);
-  if(modem == RADIOLIB_LR11X0_PACKET_TYPE_LORA) {
-    state = setPacketParamsLoRa(this->preambleLengthLoRa, this->headerType, len, this->crcTypeLoRa, this->invertIQEnabled);
-  
-  } else if(modem == RADIOLIB_LR11X0_PACKET_TYPE_GFSK) {
-    state = setPacketParamsGFSK(this->preambleLengthGFSK, this->preambleDetLength, this->syncWordLength, this->addrComp, this->packetType, len, this->crcTypeGFSK, this->whitening);
-  
-  } else if(modem != RADIOLIB_LR11X0_PACKET_TYPE_LR_FHSS) {
-    return(RADIOLIB_ERR_UNKNOWN);
-  
-  }
-  RADIOLIB_ASSERT(state);
-
-  // set DIO mapping
-  state = setDioIrqParams(RADIOLIB_LR11X0_IRQ_TX_DONE | RADIOLIB_LR11X0_IRQ_TIMEOUT);
-  RADIOLIB_ASSERT(state);
-
-  if(modem == RADIOLIB_LR11X0_PACKET_TYPE_LR_FHSS) {
-    // in LR-FHSS mode, the packet is built by the device
-    // TODO add configurable device offset
-    state = lrFhssBuildFrame(this->lrFhssHdrCount, this->lrFhssCr, this->lrFhssGrid, true, this->lrFhssBw, this->lrFhssHopSeq, 0, const_cast<uint8_t*>(data), len);
-    RADIOLIB_ASSERT(state);
-
-  } else {
-    // write packet to buffer
-    state = writeBuffer8(const_cast<uint8_t*>(data), len);
-    RADIOLIB_ASSERT(state);
-
-  }
-
-  // clear interrupt flags
-  state = clearIrqState(RADIOLIB_LR11X0_IRQ_ALL);
-  RADIOLIB_ASSERT(state);
-
-  // set RF switch (if present)
-  this->mod->setRfSwitchState(Module::MODE_TX);
-
-  // start transmission
-  state = setTx(RADIOLIB_LR11X0_TX_TIMEOUT_NONE);
-  RADIOLIB_ASSERT(state);
-
-  // wait for BUSY to go low (= PA ramp up done)
-  while(this->mod->hal->digitalRead(this->mod->getGpio())) {
-    this->mod->hal->yield();
-  }
-
-  return(state);
-}
-
 int16_t LR11x0::finishTransmit() {
   // clear interrupt flags
   clearIrqState(RADIOLIB_LR11X0_IRQ_ALL);
@@ -491,46 +426,6 @@ int16_t LR11x0::finishTransmit() {
 
 int16_t LR11x0::startReceive() {
   return(this->startReceive(RADIOLIB_LR11X0_RX_TIMEOUT_INF, RADIOLIB_IRQ_RX_DEFAULT_FLAGS, RADIOLIB_IRQ_RX_DEFAULT_MASK, 0));
-}
-
-int16_t LR11x0::startReceive(uint32_t timeout, uint32_t irqFlags, uint32_t irqMask, size_t len) {
-  (void)len;
-  
-  // check active modem
-  int16_t state = RADIOLIB_ERR_NONE;
-  uint8_t modem = RADIOLIB_LR11X0_PACKET_TYPE_NONE;
-  state = getPacketType(&modem);
-  RADIOLIB_ASSERT(state);
-  if((modem != RADIOLIB_LR11X0_PACKET_TYPE_LORA) && 
-     (modem != RADIOLIB_LR11X0_PACKET_TYPE_GFSK)) {
-    return(RADIOLIB_ERR_WRONG_MODEM);
-  }
-
-  // set DIO mapping
-  uint32_t irq = irqMask;
-  if(timeout != RADIOLIB_LR11X0_RX_TIMEOUT_INF) {
-    irq |= (1UL << RADIOLIB_IRQ_TIMEOUT);
-  }
-  state = setDioIrqParams(getIrqMapped(irqFlags & irq));
-  RADIOLIB_ASSERT(state);
-
-  // clear interrupt flags
-  state = clearIrqState(RADIOLIB_LR11X0_IRQ_ALL);
-  RADIOLIB_ASSERT(state);
-
-  // set implicit mode and expected len if applicable
-  if((this->headerType == RADIOLIB_LR11X0_LORA_HEADER_IMPLICIT) && (modem == RADIOLIB_LR11X0_PACKET_TYPE_LORA)) {
-    state = setPacketParamsLoRa(this->preambleLengthLoRa, this->headerType, this->implicitLen, this->crcTypeLoRa, this->invertIQEnabled);
-    RADIOLIB_ASSERT(state);
-  }
-
-  // set RF switch (if present)
-  this->mod->setRfSwitchState(Module::MODE_RX);
-
-  // set mode to receive
-  state = setRx(timeout);
-
-  return(state);
 }
 
 uint32_t LR11x0::getIrqStatus() {
@@ -2052,6 +1947,124 @@ int16_t LR11x0::getModem(ModemType_t* modem) {
   return(RADIOLIB_ERR_WRONG_MODEM);
 }
 
+int16_t LR11x0::stageMode(RadioModeType_t mode, RadioModeConfig_t* cfg) {
+  int16_t state;
+
+  switch(mode) {
+    case(RADIOLIB_RADIO_MODE_RX): {
+      // check active modem
+      uint8_t modem = RADIOLIB_LR11X0_PACKET_TYPE_NONE;
+      state = getPacketType(&modem);
+      RADIOLIB_ASSERT(state);
+      if((modem != RADIOLIB_LR11X0_PACKET_TYPE_LORA) && 
+        (modem != RADIOLIB_LR11X0_PACKET_TYPE_GFSK)) {
+        return(RADIOLIB_ERR_WRONG_MODEM);
+      }
+
+      // set DIO mapping
+      if(cfg->receive.timeout != RADIOLIB_LR11X0_RX_TIMEOUT_INF) {
+        cfg->receive.irqMask |= (1UL << RADIOLIB_IRQ_TIMEOUT);
+      }
+      state = setDioIrqParams(getIrqMapped(cfg->receive.irqFlags & cfg->receive.irqMask));
+      RADIOLIB_ASSERT(state);
+
+      // clear interrupt flags
+      state = clearIrqState(RADIOLIB_LR11X0_IRQ_ALL);
+      RADIOLIB_ASSERT(state);
+
+      // set implicit mode and expected len if applicable
+      if((this->headerType == RADIOLIB_LR11X0_LORA_HEADER_IMPLICIT) && (modem == RADIOLIB_LR11X0_PACKET_TYPE_LORA)) {
+        state = setPacketParamsLoRa(this->preambleLengthLoRa, this->headerType, this->implicitLen, this->crcTypeLoRa, this->invertIQEnabled);
+        RADIOLIB_ASSERT(state);
+      }
+      this->rxTimeout = cfg->receive.timeout;
+    } break;
+  
+    case(RADIOLIB_RADIO_MODE_TX): {
+      // check packet length
+      if(cfg->transmit.len > RADIOLIB_LR11X0_MAX_PACKET_LENGTH) {
+        return(RADIOLIB_ERR_PACKET_TOO_LONG);
+      }
+
+      // maximum packet length is decreased by 1 when address filtering is active
+      if((this->addrComp != RADIOLIB_LR11X0_GFSK_ADDR_FILTER_DISABLED) && (cfg->transmit.len > RADIOLIB_LR11X0_MAX_PACKET_LENGTH - 1)) {
+        return(RADIOLIB_ERR_PACKET_TOO_LONG);
+      }
+
+      // set packet Length
+      state = RADIOLIB_ERR_NONE;
+      uint8_t modem = RADIOLIB_LR11X0_PACKET_TYPE_NONE;
+      state = getPacketType(&modem);
+      RADIOLIB_ASSERT(state);
+      if(modem == RADIOLIB_LR11X0_PACKET_TYPE_LORA) {
+        state = setPacketParamsLoRa(this->preambleLengthLoRa, this->headerType, cfg->transmit.len, this->crcTypeLoRa, this->invertIQEnabled);
+      
+      } else if(modem == RADIOLIB_LR11X0_PACKET_TYPE_GFSK) {
+        state = setPacketParamsGFSK(this->preambleLengthGFSK, this->preambleDetLength, this->syncWordLength, this->addrComp, this->packetType, cfg->transmit.len, this->crcTypeGFSK, this->whitening);
+      
+      } else if(modem != RADIOLIB_LR11X0_PACKET_TYPE_LR_FHSS) {
+        return(RADIOLIB_ERR_UNKNOWN);
+      
+      }
+      RADIOLIB_ASSERT(state);
+
+      // set DIO mapping
+      state = setDioIrqParams(RADIOLIB_LR11X0_IRQ_TX_DONE | RADIOLIB_LR11X0_IRQ_TIMEOUT);
+      RADIOLIB_ASSERT(state);
+
+      if(modem == RADIOLIB_LR11X0_PACKET_TYPE_LR_FHSS) {
+        // in LR-FHSS mode, the packet is built by the device
+        // TODO add configurable device offset
+        state = lrFhssBuildFrame(this->lrFhssHdrCount, this->lrFhssCr, this->lrFhssGrid, true, this->lrFhssBw, this->lrFhssHopSeq, 0, cfg->transmit.data, cfg->transmit.len);
+        RADIOLIB_ASSERT(state);
+
+      } else {
+        // write packet to buffer
+        state = writeBuffer8(cfg->transmit.data, cfg->transmit.len);
+        RADIOLIB_ASSERT(state);
+
+      }
+
+      // clear interrupt flags
+      state = clearIrqState(RADIOLIB_LR11X0_IRQ_ALL);
+      RADIOLIB_ASSERT(state);
+    } break;
+    
+    default:
+      return(RADIOLIB_ERR_UNSUPPORTED);
+  }
+
+  this->stagedMode = mode;
+  return(state);
+}
+
+int16_t LR11x0::launchMode() {
+  int16_t state;
+  switch(this->stagedMode) {
+    case(RADIOLIB_RADIO_MODE_RX): {
+      this->mod->setRfSwitchState(Module::MODE_RX);
+      state = setRx(this->rxTimeout);
+    } break;
+  
+    case(RADIOLIB_RADIO_MODE_TX): {
+      this->mod->setRfSwitchState(Module::MODE_TX);
+      state = setTx(RADIOLIB_LR11X0_TX_TIMEOUT_NONE);
+      RADIOLIB_ASSERT(state);
+
+      // wait for BUSY to go low (= PA ramp up done)
+      while(this->mod->hal->digitalRead(this->mod->getGpio())) {
+        this->mod->hal->yield();
+      }
+    } break;
+    
+    default:
+      return(RADIOLIB_ERR_UNSUPPORTED);
+  }
+
+  this->stagedMode = RADIOLIB_RADIO_MODE_NONE;
+  return(state);
+}
+
 int16_t LR11x0::modSetup(float tcxoVoltage, uint8_t modem) {
   this->mod->init();
   this->mod->hal->pinMode(this->mod->getIrq(), this->mod->hal->GpioModeInput);
@@ -2334,12 +2347,12 @@ int16_t LR11x0::readRegMem32(uint32_t addr, uint32_t* data, size_t len) {
   return(state);
 }
 
-int16_t LR11x0::writeBuffer8(uint8_t* data, size_t len) {
+int16_t LR11x0::writeBuffer8(const uint8_t* data, size_t len) {
   // check maximum size
   if(len > RADIOLIB_LR11X0_SPI_MAX_READ_WRITE_LEN) {
     return(RADIOLIB_ERR_SPI_CMD_INVALID);
   }
-  return(this->SPIcommand(RADIOLIB_LR11X0_CMD_WRITE_BUFFER, true, data, len));
+  return(this->SPIcommand(RADIOLIB_LR11X0_CMD_WRITE_BUFFER, true, const_cast<uint8_t*>(data), len));
 }
 
 int16_t LR11x0::readBuffer8(uint8_t* data, size_t len, size_t offset) {
@@ -3241,8 +3254,8 @@ int16_t LR11x0::gnssAssisted(uint32_t gpsTime, uint8_t effort, uint8_t resMask, 
 }
 
 int16_t LR11x0::gnssSetAssistancePosition(float lat, float lon) {
-  uint16_t latRaw = (lat*2048.0f)/90.0f + 0.5f;
-  uint16_t lonRaw = (lon*2048.0f)/180.0f + 0.5f;
+  int16_t latRaw = (lat*2048.0f)/90.0f + 0.5f;
+  int16_t lonRaw = (lon*2048.0f)/180.0f + 0.5f;
   uint8_t buff[4] = {
     (uint8_t)((latRaw >> 8) & 0xFF), (uint8_t)(latRaw & 0xFF),
     (uint8_t)((lonRaw >> 8) & 0xFF), (uint8_t)(lonRaw & 0xFF),
@@ -3256,11 +3269,11 @@ int16_t LR11x0::gnssReadAssistancePosition(float* lat, float* lon) {
 
   // pass the replies
   if(lat) {
-    uint16_t latRaw = ((uint16_t)(buff[0]) << 8) | (uint16_t)(buff[1]);
+    int16_t latRaw = ((int16_t)(buff[0]) << 8) | (int16_t)(buff[1]);
     *lat = ((float)latRaw*90.0f)/2048.0f;
   }
   if(lon) {
-    uint16_t lonRaw = ((uint16_t)(buff[2]) << 8) | (uint16_t)(buff[3]);
+    int16_t lonRaw = ((int16_t)(buff[2]) << 8) | (int16_t)(buff[3]);
     *lon = ((float)lonRaw*180.0f)/2048.0f;
   }
 
@@ -3390,8 +3403,8 @@ int16_t LR11x0::gnssAlmanacReadSV(uint8_t svId, uint8_t* almanac) {
 }
 
 int16_t LR11x0::gnssGetNbSvVisible(uint32_t time, float lat, float lon, uint8_t constellation, uint8_t* nbSv) {
-  uint16_t latRaw = (lat*2048.0f)/90.0f + 0.5f;
-  uint16_t lonRaw = (lon*2048.0f)/180.0f + 0.5f;
+  int16_t latRaw = (lat*2048.0f)/90.0f + 0.5f;
+  int16_t lonRaw = (lon*2048.0f)/180.0f + 0.5f;
   uint8_t reqBuff[9] = { 
     (uint8_t)((time >> 24) & 0xFF), (uint8_t)((time >> 16) & 0xFF),
     (uint8_t)((time >> 8) & 0xFF), (uint8_t)(time & 0xFF),
@@ -3528,21 +3541,21 @@ int16_t LR11x0::gnssReadDopplerSolverRes(uint8_t* error, uint8_t* nbSvUsed, floa
   if(error) { *error = buff[0]; }
   if(nbSvUsed) { *nbSvUsed = buff[1]; }
   if(lat) {
-    uint16_t latRaw = ((uint16_t)(buff[2]) << 8) | (uint16_t)buff[3];
+    int16_t latRaw = ((int16_t)(buff[2]) << 8) | (int16_t)buff[3];
     *lat = ((float)latRaw * 90.0f)/2048.0f;
   }
   if(lon) {
-    uint16_t lonRaw = ((uint16_t)(buff[4]) << 8) | (uint16_t)buff[5];
+    int16_t lonRaw = ((int16_t)(buff[4]) << 8) | (int16_t)buff[5];
     *lon = ((float)lonRaw * 180.0f)/2048.0f;
   }
   if(accuracy) { *accuracy = ((uint16_t)(buff[6]) << 8) | (uint16_t)buff[7]; }
   if(xtal) { *xtal = ((uint16_t)(buff[8]) << 8) | (uint16_t)buff[9]; }
   if(latFilt) {
-    uint16_t latRaw = ((uint16_t)(buff[10]) << 8) | (uint16_t)buff[11];
+    int16_t latRaw = ((int16_t)(buff[10]) << 8) | (int16_t)buff[11];
     *latFilt = ((float)latRaw * 90.0f)/2048.0f;
   }
   if(lonFilt) {
-    uint16_t lonRaw = ((uint16_t)(buff[12]) << 8) | (uint16_t)buff[13];
+    int16_t lonRaw = ((int16_t)(buff[12]) << 8) | (int16_t)buff[13];
     *lonFilt = ((float)lonRaw * 180.0f)/2048.0f;
   }
   if(accuracyFilt) { *accuracyFilt = ((uint16_t)(buff[14]) << 8) | (uint16_t)buff[15]; }

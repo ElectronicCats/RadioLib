@@ -2,9 +2,9 @@
 
 #include <string.h>
 
-PhysicalLayer::PhysicalLayer(float step, size_t maxLen) {
-  this->freqStep = step;
-  this->maxPacketLength = maxLen;
+PhysicalLayer::PhysicalLayer() {
+  this->freqStep = 1;
+  this->maxPacketLength = 1;
   #if !RADIOLIB_EXCLUDE_DIRECT_RECEIVE
   this->bufferBitPos = 0;
   this->bufferWritePos = 0;
@@ -132,11 +132,18 @@ int16_t PhysicalLayer::startReceive() {
 }
 
 int16_t PhysicalLayer::startReceive(uint32_t timeout, RadioLibIrqFlags_t irqFlags, RadioLibIrqFlags_t irqMask, size_t len) {
-  (void)timeout;
-  (void)irqFlags;
-  (void)irqMask;
-  (void)len;
-  return(RADIOLIB_ERR_UNSUPPORTED);
+  RadioModeConfig_t cfg = {
+    .receive = {
+      .timeout = timeout,
+      .irqFlags = irqFlags,
+      .irqMask = irqMask,
+      .len = len,
+    }
+  };
+
+  int16_t state = this->stageMode(RADIOLIB_RADIO_MODE_RX, &cfg);
+  RADIOLIB_ASSERT(state);
+  return(this->launchMode());
 }
 
 #if defined(RADIOLIB_BUILD_ARDUINO)
@@ -150,10 +157,17 @@ int16_t PhysicalLayer::startTransmit(const char* str, uint8_t addr) {
 }
 
 int16_t PhysicalLayer::startTransmit(const uint8_t* data, size_t len, uint8_t addr) {
-  (void)data;
-  (void)len;
-  (void)addr;
-  return(RADIOLIB_ERR_UNSUPPORTED);
+  RadioModeConfig_t cfg = {
+    .transmit = {
+      .data = data,
+      .len = len,
+      .addr = addr,
+    }
+  };
+
+  int16_t state = this->stageMode(RADIOLIB_RADIO_MODE_TX, &cfg);
+  RADIOLIB_ASSERT(state);
+  return(this->launchMode());
 }
 
 int16_t PhysicalLayer::finishTransmit() {
@@ -278,10 +292,6 @@ int16_t PhysicalLayer::setDataRate(DataRate_t dr) {
 int16_t PhysicalLayer::checkDataRate(DataRate_t dr) {
   (void)dr;
   return(RADIOLIB_ERR_UNSUPPORTED);
-}
-
-float PhysicalLayer::getFreqStep() const {
-  return(this->freqStep);
 }
 
 size_t PhysicalLayer::getPacketLength(bool update) {
@@ -534,6 +544,16 @@ int16_t PhysicalLayer::setModem(ModemType_t modem) {
 
 int16_t PhysicalLayer::getModem(ModemType_t* modem) {
   (void)modem;
+  return(RADIOLIB_ERR_UNSUPPORTED);
+}
+
+int16_t PhysicalLayer::stageMode(RadioModeType_t mode, RadioModeConfig_t* cfg) {
+  (void)mode;
+  (void)cfg;
+  return(RADIOLIB_ERR_UNSUPPORTED);
+}
+
+int16_t PhysicalLayer::launchMode() {
   return(RADIOLIB_ERR_UNSUPPORTED);
 }
 

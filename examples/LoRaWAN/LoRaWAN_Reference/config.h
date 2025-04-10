@@ -37,9 +37,11 @@ const uint32_t uplinkIntervalSeconds = 5UL * 60UL;    // minutes x seconds
 // for the curious, the #ifndef blocks allow for automated testing &/or you can
 // put your EUI & keys in to your platformio.ini - see wiki for more tips
 
-// regional choices: EU868, US915, AU915, AS923, AS923_2, AS923_3, AS923_4, IN865, KR920, CN500
+// regional choices: EU868, US915, AU915, AS923, AS923_2, AS923_3, AS923_4, IN865, KR920, CN470
 const LoRaWANBand_t Region = EU868;
-const uint8_t subBand = 0;  // For US915, change this to 2, otherwise leave on 0
+
+// subband choice: for US915/AU915 set to 2, for CN470 set to 1, otherwise leave on 0
+const uint8_t subBand = 0;
 
 // ============================================================================
 // Below is to support the sketch - only make changes if the notes say so ...
@@ -140,6 +142,21 @@ void arrayDump(uint8_t *buffer, uint16_t len) {
     Serial.print(b, HEX);
   }
   Serial.println();
+}
+
+// Custom delay function:
+// Communication over LoRaWAN includes a lot of delays.
+// By default, RadioLib will use the Arduino delay() function,
+// which will waste a lot of power. However, you can put your
+// microcontroller to sleep instead by customizing the function below,
+// and providing it to RadioLib via "node.setSleepFunction".
+// NOTE: You ahve to ensure that this function is timed precisely, and
+//       does actually wait for the amount of time specified!
+//       Failure to do so will result in missed downlinks or failed join!
+void customDelay(RadioLibTime_t ms) {
+  // this is just an example, so we use the Arduino delay() function,
+  // but you can put your microcontroller to sleep here
+  ::delay(ms);
 }
 
 #endif
